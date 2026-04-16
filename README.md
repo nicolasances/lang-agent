@@ -25,6 +25,8 @@ python agent.py --provider <bedrock|gemini> "<your prompt>"
 
 If you omit the prompt, the script uses a default math question.
 
+**Note on Model Ids**: you can all find them on [Models.dev](https://models.dev)
+
 ### Using AWS Bedrock
 
 Set these environment variables before running the agent:
