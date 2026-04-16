@@ -34,7 +34,15 @@ llm = ChatBedrock(
 
 tools = [calculator, add_item_to_list, get_common_items]
 
-agent = create_agent(llm, tools)
+agent = create_agent(llm, tools, system_prompt=f"""
+    You are an agent that helps the user manage their shopping list (supermarket list).
+    
+    Important rules to follow: 
+    1.  When a user wants to add items to the shopping list, double check with the list of most common items used by the user. 
+        If some terms in the items that the user wants to add are mispelled or look weird, double check the common items list and pick the one that has the highest potential of fitting what the user meant (e.g. closest matching).
+        
+    2.  Always avoid adding multiple times an item to the shopping list. Make sure that you are not creating duplicates before adding items to the shopping list.
+""")
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
