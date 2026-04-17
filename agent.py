@@ -14,11 +14,14 @@ Environment variables:
 """
 
 import argparse
+import json
 import os
+from datetime import datetime, timezone
 
 import google.auth
 from langchain.agents import create_agent
 from langchain_aws import ChatBedrock
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from tools import calculator, add_item_to_list, get_common_items
@@ -63,6 +66,8 @@ def create_llm(model_provider: str):
             project=project,
             location=location,
             temperature=0,
+            thinking_budget=-1,
+            include_thoughts=True,
         )
 
     if selected_provider == "bedrock":
@@ -74,6 +79,12 @@ def create_llm(model_provider: str):
             model_id=model_id,
             region_name=aws_region,
             credentials_profile_name=aws_profile,
+            model_kwargs={
+                "thinking": {
+                    "type": "enabled",
+                    "budget_tokens": 4096,
+                },
+            },
         )
 
     raise ValueError("Unsupported MODEL_PROVIDER. Use 'gemini' or 'bedrock'.")
@@ -100,12 +111,82 @@ def create_shopping_agent(model_provider: str):
     return create_agent(llm, tools, system_prompt=SYSTEM_PROMPT)
 
 
+# ── Trace ─────────────────────────────────────────────────────────────────────
+
+TRACES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "traces")
+
+
+def _format_message(msg) -> str:
+    """Return a Markdown section for a single LangChain message."""
+
+    if isinstance(msg, HumanMessage):
+        return f"## 🧑 Human\n\n{msg.content}\n"
+
+    if isinstance(msg, AIMessage):
+        blocks = msg.content_blocks
+        reasoning_blocks = [b for b in blocks if b["type"] == "reasoning"]
+        text_blocks = [b for b in blocks if b["type"] == "text"]
+
+        parts: list[str] = ["## 🤖 AI\n"]
+
+        if reasoning_blocks:
+            reasoning = "".join(b["reasoning"] for b in reasoning_blocks)
+            quoted = "\n".join(f"> {line}" for line in reasoning.splitlines())
+            parts.append(f"### 💭 Thinking\n\n{quoted}\n")
+
+        if text_blocks:
+            text = "".join(b["text"] for b in text_blocks)
+            parts.append(f"{text}\n")
+
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                args_str = json.dumps(tc["args"], indent=2, ensure_ascii=False)
+                parts.append(
+                    f"### 🔧 Tool Call → `{tc['name']}`\n\n"
+                    f"```json\n{args_str}\n```\n"
+                )
+        return "\n".join(parts)
+
+    if isinstance(msg, ToolMessage):
+        return (
+            f"## 🛠️ Tool Result — `{msg.name}`\n\n"
+            f"```\n{msg.content}\n```\n"
+        )
+
+    return f"## ❓ {type(msg).__name__}\n\n{getattr(msg, 'content', str(msg))}\n"
+
+
+def write_trace(messages: list, query: str) -> str:
+    """Write a Markdown trace of the agent run and return the file path."""
+    os.makedirs(TRACES_DIR, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filepath = os.path.join(TRACES_DIR, f"trace_{timestamp}.md")
+
+    lines = [
+        f"# Agent Trace — {timestamp}\n",
+        f"**Query:** {query}\n",
+        "---\n",
+    ]
+    for msg in messages:
+        lines.append(_format_message(msg))
+        lines.append("---\n")
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    return filepath
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 def run(query: str, provider: str) -> str:
 
     agent = create_shopping_agent(provider)
     result = agent.invoke({"messages": [("human", query)]})
+
+    trace_path = write_trace(result["messages"], query)
+    print(f"Trace   : {trace_path}")
+
     return result["messages"][-1].content
 
 
